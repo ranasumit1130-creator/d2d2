@@ -1,219 +1,271 @@
 import {
-    cep, flightTime, fuelConsumption, kineticEnergy, joulesToTNT,
-    totalEnergyTNT, terminalVelocity, fragmentVelocity, fragmentRange,
-    thermalRadius, craterRadius, craterDepth, damageZones, overpressureCurve,
+    cep,
+    flightTime,
+    fuelConsumption,
+    kineticEnergy,
+    joulesToTNT,
+    totalEnergyTNT,
+    terminalVelocity,
+    fragmentVelocity,
+    fragmentRange,
+    thermalRadius,
+    craterRadius,
+    craterDepth,
+    damageZones,
+    overpressure,
+    overpressureCurve,
 } from './physics.js';
 
-// ── MAPPERS ──
+const BASE_CEP_BY_GUIDANCE = { gps: 12, ai: 4, ir: 20, radar: 10 };
+const ATTACK_ROLES = new Set(['attack', 'kamikaze', 'atk']);
+const SUPPORT_ISR_ROLES = new Set(['surveillance', 'rec']);
+const SUPPORT_EW_ROLES = new Set(['ew', 'decoy', 'dec']);
 
-const _BASE_CEP = { gps: 10, ai: 4, ir: 25, radar: 18 };
+function _normRole(role) {
+    return String(role ?? '').trim().toLowerCase();
+}
 
-export function mapDroneToEngine(dbDrone) {
-    const fuelRateKgH = dbDrone.weight_kg * 0.05;
-    const casingKg = Math.max(dbDrone.weight_kg - (dbDrone.payload_capacity_kg ?? 0), dbDrone.weight_kg * 0.30);
+// ------------------------
+// MAPPERS (DB -> Engine)
+// ------------------------
+
+export function mapDroneToEngine(myDbDrone) {
+    const guidance = String(myDbDrone.guidance_system ?? 'gps').toLowerCase();
+    const massKg = Number(myDbDrone.weight_kg ?? 0);
+    const payloadKg = Number(myDbDrone.payload_capacity_kg ?? 0);
+
     return {
-        id: dbDrone.id, name: dbDrone.name, role: dbDrone.category,
-        massKg: dbDrone.weight_kg,
-        cruiseMs: dbDrone.cruise_speed_kmh / 3.6,
-        maxSpeedMs: dbDrone.max_speed_kmh / 3.6,
-        rangeKm: dbDrone.max_range_km,
-        serviceAltM: dbDrone.service_ceiling_m,
-        enduranceHours: dbDrone.endurance_hours,
-        payloadKg: dbDrone.payload_capacity_kg,
-        payloadTNTkg: dbDrone.warhead_weight_kg ?? 0,
-        casingKg,
-        guidanceType: dbDrone.guidance_system,
-        baseCEP_m: _BASE_CEP[dbDrone.guidance_system] ?? 15,
-        stealthRating: dbDrone.stealth_rating,
-        antiJamPct: dbDrone.anti_jam_resistance_pct,
-        aiEnabled: dbDrone.ai_enabled,
-        baseSuccessRate: dbDrone.base_success_rate_pct / 100,
-        evasionProbability: dbDrone.evasion_probability_pct / 100,
-        radarCrossSection: dbDrone.radar_cross_section,
-        unitCostUSD: dbDrone.unit_cost_usd,
-        launchCostUSD: dbDrone.launch_cost_usd,
-        fuelRateKgH,
+        id: myDbDrone.id,
+        name: myDbDrone.name,
+        role: String(myDbDrone.category ?? '').toLowerCase(),
+        massKg,
+        cruiseMs: Number(myDbDrone.cruise_speed_kmh ?? 0) / 3.6,
+        maxSpeedMs: Number(myDbDrone.max_speed_kmh ?? 0) / 3.6,
+        rangeKm: Number(myDbDrone.max_range_km ?? 0),
+        serviceAltM: Number(myDbDrone.service_ceiling_m ?? 0),
+        enduranceHours: Number(myDbDrone.endurance_hours ?? 0),
+        payloadKg,
+        payloadTNTkg: Number(myDbDrone.warhead_weight_kg ?? 0),
+        casingKg: Math.max(massKg - payloadKg, massKg * 0.25),
+        guidanceType: guidance,
+        baseCEP_m: BASE_CEP_BY_GUIDANCE[guidance] ?? 14,
+        stealthRating: Number(myDbDrone.stealth_rating ?? 5),
+        antiJamPct: Number(myDbDrone.anti_jam_resistance_pct ?? 0),
+        aiEnabled: Boolean(myDbDrone.ai_enabled),
+        baseSuccessRate: Number(myDbDrone.base_success_rate_pct ?? 70) / 100,
+        evasionProbability: Number(myDbDrone.evasion_probability_pct ?? 30) / 100,
+        radarCrossSection: Number(myDbDrone.radar_cross_section ?? 1),
+        unitCostUSD: Number(myDbDrone.unit_cost_usd ?? 0),
+        launchCostUSD: Number(myDbDrone.launch_cost_usd ?? 0),
+        fuelRateKgH: Math.max(massKg * 0.045, 0.2),
     };
 }
 
-export function mapTargetToEngine(dbTarget, configOpts = {}) {
-    const _HARDNESS = { low: 0.2, medium: 0.5, high: 0.9 };
-    const _ADS_LEVEL = { none: 0.0, low: 0.2, medium: 0.5, high: 0.85 };
-    const _MOBILITY = { fixed: 0.0, area: 0.25, mobile: 1.0 };
-    const protectionLevel = configOpts.protection_level ?? 'medium';
-    const adsDensityKey = configOpts.ads_density ?? 'medium';
-    const adsPlacements = configOpts.ads_placement_count ?? 0;
-    const airDefenseLevel = adsPlacements > 0
-        ? Math.min(adsPlacements / 10, 1.0)
-        : (_ADS_LEVEL[adsDensityKey] ?? 0.5);
+export function mapTargetToEngine(myDbTarget) {
+    const details = myDbTarget.details ?? {};
+    const typeRaw = String(details.type ?? 'SOFT').toUpperCase();
+    const ctrCapScale = Math.max(0, Math.min(5, Number(details.ctr_cap_scale ?? 0)));
+    const hardness = typeRaw === 'HARD' ? 0.85 : 0.35;
+
     return {
-        name: dbTarget.name, latitude: dbTarget.latitude, longitude: dbTarget.longitude,
-        targetType: dbTarget.target_type,
-        category: configOpts.category ?? 'FIXED',
-        hardness: _HARDNESS[protectionLevel] ?? 0.5,
-        airDefenseLevel,
-        mobilityFactor: _MOBILITY[dbTarget.target_type] ?? 0,
+        id: myDbTarget.id,
+        name: myDbTarget.name,
+        latitude: Number(myDbTarget.lat ?? myDbTarget.latitude ?? 0),
+        longitude: Number(myDbTarget.lon ?? myDbTarget.longitude ?? 0),
+        hardness,
+        airDefenseLevel: ctrCapScale / 5,
+        targetType: typeRaw,
+        dimensions: {
+            width: Number(details.width ?? 0),
+            length: Number(details.length ?? 0),
+            height: Number(details.height ?? 0),
+        },
+        disposition: String(details.disposition ?? 'static').toLowerCase(),
     };
 }
 
-// ── INTERNAL HELPERS ──
-
-function _requiredTNT(hardness) {
-    if (hardness < 0.33) return 25;
-    if (hardness < 0.67) return 200;
-    return 2000;
+function _requiredOverpressureKPa(targetProfile) {
+    const hardness = Math.max(0, Math.min(1, Number(targetProfile.hardness ?? 0.5)));
+    return 35 + hardness * 265;
 }
 
-function _inRange(inventory, distKm) {
-    return inventory.filter(d => d.rangeKm >= distKm);
+function _filterByRange(droneInventory, distanceKm) {
+    return (droneInventory ?? []).filter((d) => Number(d.rangeKm ?? 0) >= distanceKm);
 }
 
-function _weightedCEP(drones, distKm) {
-    const totalTNT = drones.reduce((s, d) => s + (d.payloadTNTkg ?? 0), 0);
-    if (totalTNT === 0) return Infinity;
-    return drones.reduce((s, d) =>
-        s + cep(d.baseCEP_m, distKm, d.guidanceType) * ((d.payloadTNTkg ?? 0) / totalTNT), 0);
+function _weightedAvgCEP(attackDrones, distanceKm) {
+    const weighted = attackDrones.map((d) => {
+        const tnt = Number(d.payloadTNTkg ?? 0);
+        return { w: tnt, v: cep(Number(d.baseCEP_m ?? 12), distanceKm, d.guidanceType) };
+    });
+    const sumW = weighted.reduce((s, x) => s + x.w, 0);
+    if (sumW <= 0) return null;
+    return weighted.reduce((s, x) => s + x.v * (x.w / sumW), 0);
 }
 
-function _avgStealth(drones) {
-    if (!drones.length) return 5;
-    return drones.reduce((s, d) => s + (d.stealthRating ?? 5), 0) / drones.length;
+function _etaSeconds(allDrones, distanceKm) {
+    const speedKmh = Math.min(...allDrones.map((d) => (d.cruiseMs ?? 0) * 3.6).filter((v) => v > 0));
+    if (!Number.isFinite(speedKmh)) return null;
+    return flightTime(distanceKm, speedKmh);
 }
 
-function _effectiveness(totalTNT, required, airDefenseLevel, avgStealth) {
-    const tntScore = Math.min((totalTNT / required) * 60, 60);
-    const stealthBonus = (avgStealth / 10) * 20;
-    const adsPenalty = airDefenseLevel * 30;
-    return Math.max(0, Math.min(100, tntScore + stealthBonus - adsPenalty));
+function _effectiveness(totalTNT, requiredKPa, targetProfile, avgCep, attackCount) {
+    const representativeRadius = 25 + (targetProfile.hardness ?? 0.5) * 35;
+    const achievedKPa = overpressure(totalTNT, representativeRadius);
+    const pressureScore = Math.min(65, (achievedKPa / requiredKPa) * 65);
+    const cepScore = avgCep == null ? 8 : Math.max(0, 20 - avgCep * 0.12);
+    const saturationScore = Math.min(15, attackCount * 2.5);
+    const airDefensePenalty = (targetProfile.airDefenseLevel ?? 0) * 20;
+    return Math.max(0, Math.min(100, pressureScore + cepScore + saturationScore - airDefensePenalty));
 }
 
-function _riskLevel(airDefenseLevel, avgStealth) {
-    const risk = airDefenseLevel - avgStealth / 10;
-    if (risk < -0.2) return 'LOW';
-    if (risk < 0.2) return 'MODERATE';
-    if (risk < 0.5) return 'HIGH';
-    return 'CRITICAL';
+function _riskLevel(targetProfile, allDrones) {
+    const ads = targetProfile.airDefenseLevel ?? 0;
+    const avgStealth = allDrones.length
+        ? allDrones.reduce((s, d) => s + Number(d.stealthRating ?? 5), 0) / allDrones.length
+        : 5;
+    const risk = ads * 1.25 - avgStealth / 10;
+    if (risk < -0.1) return 'LOW';
+    if (risk < 0.22) return 'MODERATE';
+    return 'HIGH';
 }
 
-function _etaString(drones, distKm) {
-    if (!drones.length) return '—';
-    const minSpeedKmh = Math.min(...drones.map(d => d.cruiseMs * 3.6));
-    const sec = Math.round(flightTime(distKm, minSpeedKmh));
-    return `${Math.floor(sec / 60)}m ${sec % 60}s`;
-}
-
-function _stats(attackDrones, supportDrones, distKm, required, airDefenseLevel) {
-    const totalTNT = attackDrones.reduce((s, d) => s + (d.payloadTNTkg ?? 0), 0);
-    const avgStealth = _avgStealth([...attackDrones, ...supportDrones]);
-    const avgCEP = attackDrones.length ? _weightedCEP(attackDrones, distKm) : Infinity;
+function _buildStats(attackDrones, supportDrones, targetProfile, distanceKm) {
+    const totalTNT = attackDrones.reduce((s, d) => s + Number(d.payloadTNTkg ?? 0), 0);
+    const avgCEP = _weightedAvgCEP(attackDrones, distanceKm);
+    const all = [...attackDrones, ...supportDrones];
+    const etaSec = _etaSeconds(all, distanceKm);
+    const requiredKPa = _requiredOverpressureKPa(targetProfile);
     return {
         totalTNT: +totalTNT.toFixed(3),
-        avgCEP_m: avgCEP === Infinity ? null : +avgCEP.toFixed(1),
-        effectiveness: +_effectiveness(totalTNT, required, airDefenseLevel, avgStealth).toFixed(1),
-        ETA: _etaString([...attackDrones, ...supportDrones], distKm),
+        avgCEP_m: avgCEP == null ? null : +avgCEP.toFixed(2),
+        effectiveness: +_effectiveness(totalTNT, requiredKPa, targetProfile, avgCEP, attackDrones.length).toFixed(1),
+        ETA: etaSec == null ? '—' : `${Math.floor(etaSec / 60)}m ${Math.round(etaSec % 60)}s`,
         zones: damageZones(totalTNT),
-        riskLevel: _riskLevel(airDefenseLevel, avgStealth),
+        riskLevel: _riskLevel(targetProfile, all),
     };
 }
 
-// ── FORMATION BUILDERS ──
+function _pickUnique(pool, usedIds, limit, predicate = () => true) {
+    const out = [];
+    for (const d of pool) {
+        if (out.length >= limit) break;
+        if (usedIds.has(d.instanceId ?? `${d.id}`)) continue;
+        if (!predicate(d)) continue;
+        usedIds.add(d.instanceId ?? `${d.id}`);
+        out.push(d);
+    }
+    return out;
+}
 
-function _precisionStrike(eligible, target, distKm) {
-    const required = _requiredTNT(target.hardness);
-    const candidates = eligible
-        .filter(d => ['attack', 'kamikaze', 'ATK'].includes(d.role))
+function _precisionStrike(eligible, targetProfile, distanceKm) {
+    const requiredKPa = _requiredOverpressureKPa(targetProfile);
+    const threshold = requiredKPa * 1.2;
+    const requiredRadius = 25 + (targetProfile.hardness ?? 0.5) * 35;
+
+    const attackPool = eligible
+        .filter((d) => ATTACK_ROLES.has(_normRole(d.role)))
         .sort((a, b) => (b.payloadTNTkg ?? 0) - (a.payloadTNTkg ?? 0));
+
+    const used = new Set();
     const attackDrones = [];
-    let tntAcc = 0;
-    for (const d of candidates) {
+    let totalTNT = 0;
+    for (const d of attackPool) {
         attackDrones.push(d);
-        tntAcc += d.payloadTNTkg ?? 0;
-        if (tntAcc >= required * 1.2) break;
+        used.add(d.instanceId ?? `${d.id}`);
+        totalTNT += Number(d.payloadTNTkg ?? 0);
+        if (overpressure(totalTNT, requiredRadius) >= threshold) break;
     }
-    const supportDrones = [];
-    const com = eligible.find(d => ['COM', 'ew'].includes(d.role));
-    const nav = eligible.find(d => d.role === 'NAV');
-    if (com) supportDrones.push(com);
-    if (nav) supportDrones.push(nav);
+
+    const supportDrones = _pickUnique(
+        eligible,
+        used,
+        2,
+        (d) => SUPPORT_EW_ROLES.has(_normRole(d.role)) || SUPPORT_ISR_ROLES.has(_normRole(d.role)),
+    );
+
     return {
-        name: 'PRECISION STRIKE', attackDrones, supportDrones,
-        stats: _stats(attackDrones, supportDrones, distKm, required, target.airDefenseLevel),
+        name: 'PRECISION STRIKE',
+        attackDrones,
+        supportDrones,
+        stats: _buildStats(attackDrones, supportDrones, targetProfile, distanceKm),
     };
 }
 
-function _saturationAssault(eligible, target, distKm) {
-    const required = _requiredTNT(target.hardness);
-    const attackCandidates = eligible
-        .filter(d => ['attack', 'kamikaze', 'ATK'].includes(d.role))
+function _saturationAssault(eligible, targetProfile, distanceKm) {
+    const attackPool = eligible
+        .filter((d) => ATTACK_ROLES.has(_normRole(d.role)))
         .sort((a, b) => (b.payloadTNTkg ?? 0) - (a.payloadTNTkg ?? 0));
-    const attackDrones = [];
-    let tntAcc = 0;
-    for (const d of attackCandidates) {
-        attackDrones.push(d);
-        tntAcc += d.payloadTNTkg ?? 0;
-        if (tntAcc >= required * 2.5) break;
-    }
+
+    const used = new Set();
+    const attackDrones = _pickUnique(attackPool, used, Math.min(Math.max(6, Math.ceil(attackPool.length * 0.55)), 12));
+
     const supportDrones = [];
-    if (target.airDefenseLevel > 0.3) {
-        eligible.filter(d => ['DEC', 'surveillance'].includes(d.role)).slice(0, 3).forEach(d => supportDrones.push(d));
-    }
-    if (target.airDefenseLevel > 0.5) {
-        eligible.filter(d => ['EW', 'ew'].includes(d.role)).slice(0, 2).forEach(d => supportDrones.push(d));
-    }
-    const com = eligible.find(d => d.role === 'COM');
-    if (com) supportDrones.push(com);
+    const ewSlots = (targetProfile.airDefenseLevel ?? 0) > 0.3 ? 3 : 1;
+    supportDrones.push(..._pickUnique(eligible, used, ewSlots, (d) => SUPPORT_EW_ROLES.has(_normRole(d.role))));
+    supportDrones.push(..._pickUnique(eligible, used, 3, (d) => SUPPORT_ISR_ROLES.has(_normRole(d.role))));
+
     return {
-        name: 'SATURATION ASSAULT', attackDrones, supportDrones,
-        stats: _stats(attackDrones, supportDrones, distKm, required, target.airDefenseLevel),
+        name: 'SATURATION ASSAULT',
+        attackDrones,
+        supportDrones,
+        stats: _buildStats(attackDrones, supportDrones, targetProfile, distanceKm),
     };
 }
 
-function _shadowReconStrike(eligible, target, distKm) {
-    const required = _requiredTNT(target.hardness);
-    const attackCandidates = eligible
-        .filter(d => ['attack', 'kamikaze', 'ATK'].includes(d.role))
+function _shadowReconStrike(eligible, targetProfile, distanceKm) {
+    const attackPool = eligible
+        .filter((d) => ATTACK_ROLES.has(_normRole(d.role)))
         .sort((a, b) => {
-            const cepa = cep(a.baseCEP_m, distKm, a.guidanceType);
-            const cepb = cep(b.baseCEP_m, distKm, b.guidanceType);
-            return cepa - cepb;
+            const aCEP = cep(a.baseCEP_m ?? 12, distanceKm, a.guidanceType);
+            const bCEP = cep(b.baseCEP_m ?? 12, distanceKm, b.guidanceType);
+            const aScore = (a.guidanceType === 'ai' ? 2 : 1) / Math.max(aCEP, 1);
+            const bScore = (b.guidanceType === 'ai' ? 2 : 1) / Math.max(bCEP, 1);
+            return bScore - aScore;
         });
-    const aiFirst = [
-        ...attackCandidates.filter(d => d.aiEnabled || d.guidanceType === 'ai'),
-        ...attackCandidates.filter(d => !d.aiEnabled && d.guidanceType !== 'ai'),
-    ];
-    const attackDrones = [];
-    let tntAcc = 0;
-    for (const d of aiFirst) {
-        attackDrones.push(d);
-        tntAcc += d.payloadTNTkg ?? 0;
-        if (tntAcc >= required) break;
+
+    const used = new Set();
+    const attackDrones = _pickUnique(attackPool, used, Math.min(4, attackPool.length));
+
+    const supportDrones = [];
+    supportDrones.push(..._pickUnique(eligible, used, 4, (d) => SUPPORT_ISR_ROLES.has(_normRole(d.role))));
+    if ((targetProfile.airDefenseLevel ?? 0) > 0.2) {
+        supportDrones.push(..._pickUnique(eligible, used, 1, (d) => SUPPORT_EW_ROLES.has(_normRole(d.role))));
     }
-    const supportDrones = [
-        ...eligible.filter(d => ['REC', 'surveillance'].includes(d.role)).slice(0, 4),
-    ];
-    const cmd = eligible.find(d => d.role === 'CMD');
-    if (cmd) supportDrones.push(cmd);
+
     return {
-        name: 'SHADOW RECON STRIKE', attackDrones, supportDrones,
-        stats: _stats(attackDrones, supportDrones, distKm, required, target.airDefenseLevel),
+        name: 'SHADOW RECON STRIKE',
+        attackDrones,
+        supportDrones,
+        stats: _buildStats(attackDrones, supportDrones, targetProfile, distanceKm),
     };
 }
-
-// ── PUBLIC API ──
 
 export function suggestFormations(targetProfile, droneInventory, distanceKm) {
-    const eligible = _inRange(droneInventory, distanceKm);
-    if (eligible.length === 0) {
-        const none = (name) => ({
-            name, attackDrones: [], supportDrones: [], stats: null,
-            error: 'No drones in inventory can reach this target.',
-        });
+    const eligible = _filterByRange(droneInventory, distanceKm);
+    const noReach = (name) => ({
+        name,
+        attackDrones: [],
+        supportDrones: [],
+        stats: {
+            totalTNT: 0,
+            avgCEP_m: null,
+            effectiveness: 0,
+            ETA: '—',
+            zones: damageZones(0),
+            riskLevel: 'HIGH',
+        },
+        error: 'No drones in inventory can reach this target.',
+    });
+
+    if (!eligible.length) {
         return {
-            PRECISION_STRIKE: none('PRECISION STRIKE'),
-            SATURATION_ASSAULT: none('SATURATION ASSAULT'),
-            SHADOW_RECON_STRIKE: none('SHADOW RECON STRIKE'),
+            PRECISION_STRIKE: noReach('PRECISION STRIKE'),
+            SATURATION_ASSAULT: noReach('SATURATION ASSAULT'),
+            SHADOW_RECON_STRIKE: noReach('SHADOW RECON STRIKE'),
         };
     }
+
     return {
         PRECISION_STRIKE: _precisionStrike(eligible, targetProfile, distanceKm),
         SATURATION_ASSAULT: _saturationAssault(eligible, targetProfile, distanceKm),
@@ -226,51 +278,51 @@ export function computeImpact(formation, distanceKm) {
     const supportDrones = formation.supportDrones ?? [];
     const allDrones = [...attackDrones, ...supportDrones];
 
-    const perDrone = allDrones.map((drone) => {
-        const speedKmh = drone.cruiseMs * 3.6;
-        const flightTimeSec = flightTime(distanceKm, speedKmh);
-        const fuelBurned = fuelConsumption(drone.fuelRateKgH ?? drone.massKg * 0.05, flightTimeSec);
-        const massOnImpact = Math.max(drone.massKg - fuelBurned, drone.massKg * 0.25);
-        const impactVel = terminalVelocity(drone.cruiseMs, drone.serviceAltM ?? 500);
-        const ke = kineticEnergy(massOnImpact, impactVel);
-        const tnt = totalEnergyTNT(massOnImpact, impactVel, drone.payloadTNTkg ?? 0);
-        const cepVal = cep(drone.baseCEP_m ?? 15, distanceKm, drone.guidanceType ?? 'gps');
-        const fragVel = fragmentVelocity(tnt, drone.casingKg ?? drone.massKg * 0.30);
+    const perDrone = allDrones.map((d) => {
+        const cruiseKmh = Math.max((d.cruiseMs ?? 0) * 3.6, 1);
+        const tSec = flightTime(distanceKm, cruiseKmh);
+        const fuelBurnKg = fuelConsumption(d.fuelRateKgH ?? (d.massKg ?? 0) * 0.045, tSec);
+        const massOnImpact = Math.max((d.massKg ?? 0) - fuelBurnKg, (d.massKg ?? 0) * 0.2);
+        const impactVelocity = terminalVelocity(d.cruiseMs ?? 0, d.serviceAltM ?? 0);
+        const ke = kineticEnergy(massOnImpact, impactVelocity);
+        const totalTNT = totalEnergyTNT(massOnImpact, impactVelocity, d.payloadTNTkg ?? 0);
+        const fragV = fragmentVelocity(d.payloadTNTkg ?? 0, d.casingKg ?? (d.massKg ?? 0) * 0.25);
+
         return {
-            id: drone.id, name: drone.name, role: drone.role,
-            isAttack: attackDrones.includes(drone),
+            id: d.id,
+            name: d.name,
+            role: d.role,
+            isAttack: attackDrones.includes(d),
             massOnImpact_kg: +massOnImpact.toFixed(2),
-            fuelBurned_kg: +fuelBurned.toFixed(2),
-            impactVelocity_ms: +impactVel.toFixed(1),
+            impactVelocity_ms: +impactVelocity.toFixed(2),
             kineticEnergy_J: +ke.toFixed(0),
-            kineticEnergy_TNT_kg: +joulesToTNT(ke).toFixed(4),
-            payloadTNT_kg: drone.payloadTNTkg ?? 0,
-            totalTNT_kg: +tnt.toFixed(4),
-            cep_m: +cepVal.toFixed(1),
-            fragmentVelocity_ms: +fragVel.toFixed(1),
-            flightTime_sec: +flightTimeSec.toFixed(0),
+            kineticEnergy_TNT_kg: +joulesToTNT(ke).toFixed(6),
+            payloadTNT_kg: +(d.payloadTNTkg ?? 0).toFixed(3),
+            totalTNT_kg: +totalTNT.toFixed(6),
+            cep_m: +cep(d.baseCEP_m ?? 12, distanceKm, d.guidanceType).toFixed(2),
+            fragmentVelocity_ms: +fragV.toFixed(2),
+            flightTimeSec: +tSec.toFixed(2),
         };
     });
 
-    const attackRows = perDrone.filter(d => d.isAttack);
-    const totalTNT = attackRows.reduce((s, d) => s + d.totalTNT_kg, 0);
-    const totalKE = perDrone.reduce((s, d) => s + d.kineticEnergy_J, 0);
-    const totalPayload = attackRows.reduce((s, d) => s + d.payloadTNT_kg, 0);
-    const avgCEP = attackRows.length && totalPayload > 0
-        ? attackRows.reduce((s, d) => s + d.cep_m * (d.payloadTNT_kg / totalPayload), 0)
+    const attackRows = perDrone.filter((r) => r.isAttack);
+    const totalTNT = attackRows.reduce((s, r) => s + r.totalTNT_kg, 0);
+    const totalKE = perDrone.reduce((s, r) => s + r.kineticEnergy_J, 0);
+    const avgCEP = attackRows.length
+        ? attackRows.reduce((s, r) => s + r.cep_m, 0) / attackRows.length
         : null;
 
     return {
         perDrone,
         combined: {
-            totalTNT_kg: +totalTNT.toFixed(3),
+            totalTNT_kg: +totalTNT.toFixed(4),
             totalKE_joules: +totalKE.toFixed(0),
-            avgCEP_m: avgCEP !== null ? +avgCEP.toFixed(1) : null,
-            craterRadius_m: +craterRadius(totalTNT).toFixed(1),
-            craterDepth_m: +craterDepth(totalTNT).toFixed(1),
-            fragmentRange_m: +fragmentRange(totalTNT).toFixed(1),
-            thermalRadius_m: +thermalRadius(totalTNT).toFixed(1),
+            avgCEP_m: avgCEP == null ? null : +avgCEP.toFixed(2),
             damageZones: damageZones(totalTNT),
+            craterRadius_m: +craterRadius(totalTNT).toFixed(3),
+            craterDepth_m: +craterDepth(totalTNT).toFixed(3),
+            fragmentRange_m: +fragmentRange(totalTNT).toFixed(3),
+            thermalRadius_m: +thermalRadius(totalTNT).toFixed(3),
             overpressureCurve: overpressureCurve(totalTNT),
         },
     };
