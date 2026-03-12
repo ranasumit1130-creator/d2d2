@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}DWWIAT{% endblock %}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Saira+Condensed:wght@300;400;500;600;700;800&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: #0d0f0a;
+            color: #e0e0d0;
+            font-family: 'Saira Condensed', sans-serif;
+            min-height: 100vh;
+        }
+
+        /* ── Top Nav ── */
+        .dww-nav {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 900;
+            display: flex; align-items: center; gap: 16px;
+            background: rgba(13,15,10,.95);
+            border-bottom: 1px solid #2a3a14;
+            padding: 0 24px; height: 60px;
+            backdrop-filter: blur(10px);
+        }
+        .dww-logo {
+            display: flex; align-items: center; gap: 10px;
+        }
+        .dww-logo-icon {
+            width: 36px; height: 36px; background: #8b2500;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; color: #ffd700; font-weight: 900;
+            clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+        }
+        .dww-logo-text {
+            font-family: 'Black Ops One', cursive;
+            font-size: 18px; color: #e0e0d0; letter-spacing: 3px;
+        }
+        .dww-nav-divider {
+            width: 1px; height: 30px; background: #2a3a14;
+        }
+        .dww-mission-info {
+            display: flex; flex-direction: column; gap: 1px;
+        }
+        .dww-mission-label {
+            font-size: 9px; letter-spacing: 2px; color: #5a6640;
+            text-transform: uppercase;
+        }
+        .dww-mission-name {
+            font-size: 14px; font-weight: 700; color: #a4c639;
+            letter-spacing: 1px;
+        }
+        .dww-nav-spacer { flex: 1; }
+        .dww-nav-links { display: flex; gap: 8px; }
+        .dww-nav-link {
+            font-family: 'Saira Condensed', sans-serif;
+            font-size: 11px; font-weight: 700; letter-spacing: 2px;
+            text-transform: uppercase; text-decoration: none;
+            color: #8a8a7a; border: 1px solid #2a3a14;
+            padding: 6px 16px; transition: all .15s;
+        }
+        .dww-nav-link:hover {
+            color: #e0e0d0; border-color: #6b7f3b;
+            background: rgba(107,127,59,.1);
+        }
+
+        /* ── Scanline overlay ── */
+        .dww-scanlines {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none; z-index: 9998;
+            background: repeating-linear-gradient(
+                0deg, transparent, transparent 2px,
+                rgba(0,0,0,.03) 2px, rgba(0,0,0,.03) 4px
+            );
+        }
+
+        footer {
+            text-align: center; padding: 20px;
+            font-size: 9px; color: #2a3a14;
+            letter-spacing: 3px; text-transform: uppercase;
+        }
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <div class="dww-scanlines"></div>
+
+    <nav class="dww-nav">
+        <div class="dww-logo">
+            <div class="dww-logo-icon">✦</div>
+            <span class="dww-logo-text">DWWIAT</span>
+        </div>
+        <div class="dww-nav-divider"></div>
+        <div class="dww-mission-info">
+            <span class="dww-mission-label">Active Mission</span>
+            <span class="dww-mission-name">OPERATION IRON VEIL</span>
+        </div>
+        <div class="dww-nav-spacer"></div>
+        <div class="dww-nav-links">
+            <a href="/" class="dww-nav-link">Home</a>
+            <a href="#" class="dww-nav-link">Missions</a>
+            <a href="#" class="dww-nav-link">Reports</a>
+        </div>
+    </nav>
+
+    {% block content %}{% endblock %}
+
+    <footer>DWWIAT · Tactical Operations Center · Classified</footer>
+
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
